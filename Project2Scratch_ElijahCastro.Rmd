@@ -1,0 +1,693 @@
+---
+title: "PSTAT 220A Project 2 Scratch Work"
+author: "Elijah Castro"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+```{r, echo=FALSE, message=FALSE, include=FALSE}
+library(kableExtra)
+library(knitr)
+library(tinytex)
+library(ggplot2)
+library(tidyverse)
+library(latex2exp)
+library(faraway)
+library(car)
+library(ellipse)
+library(gridExtra)
+library(leaps)
+library(boot)
+library(glmnet)
+library(MASS)
+library(nlme)
+library(reshape2)
+library(plyr)
+library(DescTools)
+library(pander)
+
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=7, fig.align='center')
+
+options(digits = 2)
+options(scipen = 1)
+
+## indents are for indenting r code as formatted text
+## They may need to be adjusted depending on your OS
+# if your output looks odd, increase or decrease indent
+indent1 = '    '
+indent2 = '        '
+indent3 = '            '
+```
+
+
+```{r, echo = F}
+bfcolor <- function(x, color) {
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{\\textbf{%s}}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'><b>%s</b></span>", color, x)
+  } else x
+}
+```
+---
+
+
+#### In a good data analysis, one usually needs to go through several exploratory “iterations” before reaching at the final results. In the process, tentative models should be evaluated and reevaluated by both statistical analytical tools and by common sense. In the presentation of the final results, however, one should avoid tedious reporting, but instead focus on the important findings. When appropriate, do use plots in your exploration, and do include good ones in your presentation.
+
+\
+
+The data set *property.txt* in the same folder contains a random sample of 83 properties for sale in a city. It contains 5 variables:
+
+1. *size*: size of the property (in square meters).
+2. *age*: age of the property (in years).
+3. *dc*: distance (in km) from the property to the city center.
+4. *dt*: distance (in km) from the property to a toxic waste disposal site.
+5. *price*: the listed price of the property, in thousands of dollars.
+
+Investigate how listed price depends on other variables.
+
+```{r, echo = F}
+# load in data set
+
+property <- read.table("C:/Users/elija/OneDrive/UCSB Work/Statistics MA Work/PSTAT 220A/Projects/Project 2/property.txt", header = T)
+
+pander(head(property))
+
+#property %>% filter(row_number() %in% 51)
+
+
+```
+
+\newpage
+
+# Scratch Work
+
+First, we will plot the response (`price`) vs. each independent variable 
+
+```{r, echo = F}
+par(mfrow = c(2,2))
+
+plot(property$size, property$price, xlab = "Size of Property (M^2)",
+     ylab = "Property Price (thousands)",
+     main = "Price vs. Size",
+     pch = 9, col = 3)
+
+plot(property$age, property$price, xlab = "Age of Property (years)",
+     ylab = "Property Price (thousands)",
+     main = "Price vs. Age",
+     pch = 8, col = 4)
+
+plot(property$dc, property$price, 
+     xlab = "Distance to City Center (km)",
+     ylab = "Property Price (thousands)",
+     main = "Price vs. Distance to City Center",
+     pch = 7, col = 5)
+
+plot(property$dt, property$price, 
+     xlab = "Distance to Toxic Waste Disposal Site (km)",
+     ylab = "Property Price (thousands)",
+     main = "Price vs. Distance to Disposal Site",
+     pch = 6, col = 6)
+
+
+
+```
+
+For `size`, we notice there is a strong positive linear relationship with `price`. That is, as the size of the property increases, the price also increases, on average. For `age`, we notice there is relatively mild negative relationship with `price`. That is, as the age of the property increases, the price decreases somewhat, on average. For `dc`, there is almost no positive or negative linear relationship with `price`. This will require further investigation later. Lastly, for `dt`, we notice there is a relatively strong negative linear relationship with `price`. That is, as the distance from the property to the toxic waste disposal site increases, the price of the property decreases, on average.
+
+\
+
+Now, we will fit the model on all independent variables and display summary statistics.
+
+```{r}
+fit_property <- lm(price ~ ., property)
+pander(summary(fit_property))
+
+```
+
+We notice at a 5% significance level, both `age` and `dc` variables are not significant. This will require further investigation to determine if these predictors should still be included in the model.
+
+\newpage
+
+
+Let's also check if the model fits the data well by running diagnostic plots.
+
+```{r, echo = F}
+par(mfrow = c(2,2))
+
+plot(fit_property, which = c(1,2,3,4))
+
+```
+
+```{r, echo = F, fig.height=4}
+par(mfrow = c(1,2))
+
+# Cook's statistic
+h.prop <- hatvalues(fit_property)       # leverage
+
+cd.prop <- cooks.distance(fit_property) # Cook’s statistic
+plot(h.prop/(1-h.prop),cd.prop, main = "Cook's Statistic vs h/(1-h)",
+     ylab="Cook Statistic", xlab = "h/(1-h)", ylim = c(0,0.15))
+abline(h = 4/nrow(property), col = "red", lty = 2)
+
+
+
+influencePlot(fit_property)
+
+```
+
+From the diagnostic plots, we determine that the constant variance and normality assumptions are met since the residuals vs. fitted values and scale-location plots show random scatter (homoscedasticity) and the points in the Q-Q plot follow a straight line, respectively. We will investigate for influential points and outliers and how they impact our model once we determine our best model. 
+
+
+\newpage
+
+
+Lastly, we will check the linearity condition by constructing plots on each predictor. We want to inspect any correlation between our predictors and response and to see if our model is correct. That is, we will construct added variable and partial residual plots respectively.
+
+**Added Variable Plots**
+
+```{r, echo = F}
+
+par(mfrow = c(2,2))
+
+# added variable plots for size, age, dc, and dt
+## size
+d <- residuals(lm(price ~ age + dc + dt, data = property))
+m <- residuals(lm(size ~ age + dc + dt, data = property))
+plot(m,d,xlab="size residual",ylab="price residuals")
+abline(0,coef(fit_property)[2])
+lines(lowess(m,d), col="red", lty=2)
+title("Added variable plot for size")
+
+
+## age
+d2 <- residuals(lm(price ~ size + dc + dt, data = property))
+m2 <- residuals(lm(age ~ size + dc + dt, data = property))
+plot(m2,d2,xlab="age residual",ylab="price residuals")
+abline(0,coef(fit_property)[3])
+lines(lowess(m2,d2), col="red", lty=2)
+title("Added variable plot for age")
+
+
+## dc
+d3 <- residuals(lm(price ~ size + age + dt, data = property))
+m3 <- residuals(lm(dc ~ size + age + dt, data = property))
+plot(m3,d3,xlab="dc residual",ylab="price residuals")
+abline(0,coef(fit_property)[4])
+lines(lowess(m3,d3), col="red", lty=2)
+title("Added variable plot for dc")
+
+
+## dt
+d4 <- residuals(lm(price ~ size + age + dc, data = property))
+m4 <- residuals(lm(dt ~ size + age + dc, data = property))
+plot(m4,d4,xlab="dt residual",ylab="price residuals")
+abline(0,coef(fit_property)[5])
+lines(lowess(m4,d4), col="red", lty=2)
+title("Added variable plot for dt")
+
+
+
+```
+
+
+An added-variable plot is a effective way to show the correlation
+between our independent variables (`size`,`age`, `dc`, and `dt`) and `price` conditional on other independent variables. A strong linear relationship in the added variable plot indicates the increased importance of the contribution of the regressor to the model already containing the other predictors. Here we can see for the predictors `size` and `dt`, there is strong evidence of a strong linear relationship in the added variable plot. Thus, these variables add strong contribution to the model containing all the other predictors. This is similar for the variable `age`, though not as much of a strong linear relationship. Lastly, for the `dc` variable, we notice that there is almost no linear relationship in the added variable plot. Perhaps this means that a property's distance to the city center (`dc`) adds very minimal contribution to the model. This is an indication that `dc` may not be needed in the investigation on how a property's listed price depends on other variables.
+
+
+\
+
+
+**Partial Residual Plots**
+
+```{r, echo = F}
+par(mfrow = c(2,2))
+
+# partial residual plots for size, age, dc, and dt
+## size
+pr <- residuals(fit_property)+coef(fit_property)[2]*property$size
+plot(property$size, pr, xlab="size",ylab="Partial residuals")
+abline(0,coef(fit_property)[2])
+lines(lowess(property$size,pr), col="red", lty=2)
+title("Partial residual plot for size")
+
+
+## age
+pr2 <- residuals(fit_property)+coef(fit_property)[3]*property$age
+plot(property$age, pr2, xlab="age",ylab="Partial residuals")
+abline(0,coef(fit_property)[3])
+lines(lowess(property$age,pr2), col="red", lty=2)
+title("Partial residual plot for age")
+
+
+
+## dc
+pr3 <- residuals(fit_property)+coef(fit_property)[4]*property$dc
+plot(property$dc, pr3, xlab="dc",ylab="Partial residuals")
+abline(0,coef(fit_property)[4])
+lines(lowess(property$dc,pr3), col="red", lty=2)
+title("Partial residual plot for dc")
+
+
+
+## dt
+pr4 <- residuals(fit_property)+coef(fit_property)[5]*property$dt
+plot(property$dt, pr4, xlab="dt",ylab="Partial residuals")
+abline(0,coef(fit_property)[5])
+lines(lowess(property$dt,pr4), col="red", lty=2)
+title("Partial residual plot for dt")
+
+
+```
+
+For the partial residual plots, there should be a straight line if the model is correct. A nonlinear pattern suggests we may need a higher order term or a transformation. So, for the partial residual plots of `size`, `dc`, and `dt`, there is almost a perfect straight line. Therefore, we will say the model is correct. However, for the variable `age`, there is not a straight line in the partial residual plot. Therefore, a higher order term or other transformation is most likely necessary to remedy this problem. 
+
+\
+
+## Model Selection
+
+From our previous summary statistics as well as the added variable plot of `dc`, we have evidence to believe that this predictor may not be necessary to include in the final model. Therefore, we will perform model selection using AIC criterion to confirm this belief.
+
+```{r}
+# forward
+step(lm(price~1, data=property),
+scope=list(upper=formula(fit_property)),
+direction="forward")
+
+```
+
+```{r}
+# backward
+step(fit_property, direction="backward")
+
+```
+
+\
+
+
+So, we will remove the variable `dc` (distance (in km) from the property to the city center) from the model, re-fit the model and run diagnostics again. We also attempt to remedy the non-linearity problem in the `age` variable that we noticed from the partial residual plot by adding higher order terms.
+
+\
+
+Below are the summary statistics. We notice including $age^2$ is significant at a 5% level, but the original variable `age` is still not significant.
+
+```{r}
+fit_property2 <- update(fit_property, price ~ .-dc)
+fit_property2 <- update(fit_property2, price ~ size + age + I(age^2) + dt)
+
+pander(summary(fit_property2))
+
+```
+
+\newpage
+
+Looking at the diagnostic plots below, constant variance and normality assumptions are still met. Looking at the plot of Cook's distance, we will investigate observation 51 to see if it is an outlier or influential point since it has a rather large distance value.
+
+```{r, echo=F}
+par(mfrow = c(2,2))
+
+plot(fit_property2, which = c(1,2,3,4))
+
+```
+
+\newpage
+
+**Partial Residual Plots**
+
+We also note by adding a higher order term for `age`, we also met the linearity assumption in the partial residual plots.
+
+
+```{r, echo = F}
+par(mfrow = c(2,2))
+
+# partial residual plots for size, age, and dt
+## size
+pr <- residuals(fit_property2)+coef(fit_property2)[2]*property$size
+plot(property$size, pr, xlab="size",ylab="Partial residuals")
+abline(0,coef(fit_property2)[2])
+lines(lowess(property$size,pr), col="red", lty=2)
+title("Partial residual plot for size")
+
+
+## age
+pr2 <- residuals(fit_property2)+coef(fit_property2)[3]*property$age
+plot(property$age, pr2, xlab="age",ylab="Partial residuals")
+abline(0,coef(fit_property2)[3])
+lines(lowess(property$age,pr2), col="red", lty=2)
+title("Partial residual plot for age")
+
+
+## age^2
+pr3 <- residuals(fit_property2)+coef(fit_property2)[4]*(property$age)^2
+plot((property$age)^2, pr3, xlab="age^2",ylab="Partial residuals")
+abline(0,coef(fit_property2)[4])
+lines(lowess((property$age)^2,pr3), col="red", lty=2)
+title("Partial residual plot for age^2")
+
+
+## dt
+pr4 <- residuals(fit_property2)+coef(fit_property2)[5]*property$dt
+plot(property$dt, pr4, xlab="dt",ylab="Partial residuals")
+abline(0,coef(fit_property2)[5])
+lines(lowess(property$dt,pr4), col="red", lty=2)
+title("Partial residual plot for dt")
+
+
+```
+
+
+\newpage
+
+**Added Variable Plots**
+
+However, when examining the added variable plots, we notice `age` and the higher order term of `age` still do not necessarily meet the linearity assumption. It is possible we can attribute this to the observation residual that is very far from the other residuals in the plot. Perhaps if this point is an influential point and we remove it, it would fix this issue. We will investigate further.
+
+```{r, echo = F}
+
+par(mfrow = c(2,2))
+
+# added variable plots for size, age, age^2, and dt
+## size
+d <- residuals(lm(price ~ age + I(age^2) + dt, data = property))
+m <- residuals(lm(size ~ age + I(age^2) + dt, data = property))
+plot(m,d,xlab="size residual",ylab="price residuals")
+abline(0,coef(fit_property2)[2])
+lines(lowess(m,d), col="red", lty=2)
+title("Added variable plot for size")
+
+
+## age
+d2 <- residuals(lm(price ~ size + I(age^2) + dt, data = property))
+m2 <- residuals(lm(age ~ size + I(age^2) + dt, data = property))
+plot(m2,d2,xlab="age residual",ylab="price residuals")
+abline(0,coef(fit_property2)[3])
+lines(lowess(m2,d2), col="red", lty=2)
+title("Added variable plot for age")
+
+
+## age^2
+d3 <- residuals(lm(price ~ size + age + dt, data = property))
+m3 <- residuals(lm(I(age^2) ~ size + age + dt, data = property))
+plot(m3,d3,xlab=expression("residual" ~ age^2),ylab="price residuals")
+abline(0,coef(fit_property2)[4])
+lines(lowess(m3,d3), col="red", lty=2)
+title(expression("Added variable plot for" ~ age^2))
+
+
+## dt
+d4 <- residuals(lm(price ~ size + age + I(age^2), data = property))
+m4 <- residuals(lm(dt ~ size + age + I(age^2), data = property))
+plot(m4,d4,xlab="dt residual",ylab="price residuals")
+abline(0,coef(fit_property2)[5])
+lines(lowess(m4,d4), col="red", lty=2)
+title("Added variable plot for dt")
+
+
+
+```
+
+
+
+
+\
+
+
+We will now investigate observation 51 to determine its influence on this model.
+
+
+```{r, echo = F, fig.height = 4}
+par(mfrow = c(1,2))
+
+# Cook's statistic
+h.prop2 <- hatvalues(fit_property2)       # leverage
+
+plot(h.prop2, main = "Plot of Leverages", ylab = "Leverages", ylim = c(0, 0.75)); points(x = c(22,51), y = c(h.prop2[[22]], h.prop2[[51]]), pch = 3, col = "red",cex = 2)
+
+abline(h = 3*mean(h.prop2), col = "red", lty = 2)
+text(x= 30, y = 0.20, labels = "22")
+text(x= 60, y = 0.64, labels = "51")
+
+
+
+influencePlot(fit_property2)
+
+```
+
+Looking at the plot of leverages, we see observations 51 and 22 are large leverage points since they are above the red threshold line, which indicates three times the mean leverage value.
+
+```{r}
+outlierTest(fit_property2)
+
+```
+
+Using the provided outlier test, we find there are no outliers present. Therefore, we will only examine if observations 22 and 51, which are large leverage points, are influential points. The rule of thumb to determine if an observation is influential is if the observation has a distance (using Cook's distance) greater than 4 divided by the total number of observations. Let's check this:
+
+
+```{r}
+cd.prop2 <- cooks.distance(fit_property2) # Cook’s statistic
+
+n <- nrow(property)
+which(cd.prop2 > 4/n)
+
+
+```
+
+Here we see 3 observations meet the condition of being an influential point. However, we have to remember that we check for influential points from large leverage points and outliers. Therefore, observation 51, a large leverage point, is an influential point here.
+
+\newpage
+
+# Regression Model Without Influential Point
+
+Now, since we have an influential point, our next step is to fit the best regression model without this observation present in the data, and report these results.
+
+
+```{r}
+# remove observation 51
+property_new <- property %>% filter(!row_number() %in% 51)
+
+```
+
+Below are the summary statistics. We notice including $age^2$ is still significant at a 5% level, and the original `age` variable is still not significant at the 5% level, although the p-value did decrease.  Adjusted $R^2$ did slightly increase, however.
+
+```{r}
+fit_property_new <- lm(price ~ size + age + I(age^2) + dt, data = property_new)
+
+pander(summary(fit_property_new))
+
+```
+
+\newpage
+
+Looking at the diagnostic plots below, constant variance and normality assumptions are still met. Looking at the plot of Cook's distance, there are a few observations that stand out for investigation. However, the y-axis in the plot of Cook's distance is much smaller, so it is less likely that these points have as much influence as before.
+
+```{r, echo=F}
+par(mfrow = c(2,2))
+
+plot(fit_property_new, which = c(1,2,3,4))
+
+```
+
+\newpage
+
+**Partial Residual Plots**
+
+We also note the linearity assumption is still met in the partial residual plots after removing the influential observation. The plots even slighlty improve with even straighter lines.
+
+
+```{r, echo = F}
+par(mfrow = c(2,2))
+
+# partial residual plots for size, age, and dt
+## size
+pr <- residuals(fit_property_new)+coef(fit_property_new)[2]*property_new$size
+plot(property_new$size, pr, xlab="size",ylab="Partial residuals")
+abline(0,coef(fit_property_new)[2])
+lines(lowess(property_new$size,pr), col="red", lty=2)
+title("Partial residual plot for size")
+
+
+## age
+pr2 <- residuals(fit_property_new)+coef(fit_property_new)[3]*property_new$age
+plot(property_new$age, pr2, xlab="age",ylab="Partial residuals")
+abline(0,coef(fit_property_new)[3])
+lines(lowess(property_new$age,pr2), col="red", lty=2)
+title("Partial residual plot for age")
+
+
+## age^2
+pr3 <- residuals(fit_property_new)+coef(fit_property_new)[4]*(property_new$age)^2
+plot((property_new$age)^2, pr3, xlab="age^2",ylab="Partial residuals")
+abline(0,coef(fit_property_new)[4])
+lines(lowess((property_new$age)^2,pr3), col="red", lty=2)
+title("Partial residual plot for age^2")
+
+
+
+## dt
+pr4 <- residuals(fit_property_new)+coef(fit_property_new)[5]*property_new$dt
+plot(property_new$dt, pr4, xlab="dt",ylab="Partial residuals")
+abline(0,coef(fit_property_new)[5])
+lines(lowess(property_new$dt,pr4), col="red", lty=2)
+title("Partial residual plot for dt")
+
+
+```
+
+
+\newpage
+
+**Added Variable Plots**
+
+We now inspect if removing the influential observation fixes the linearity assumption in the `age` and higher order term `age` variables. We notice that this influential point actually did have a huge effect on the linearity. Now, all added variable plots meet the linearty assumption quite well.
+
+```{r, echo = F}
+
+par(mfrow = c(2,2))
+
+# added variable plots for size, age, age^2, and dt
+## size
+d <- residuals(lm(price ~ age + I(age^2) + dt, data = property_new))
+m <- residuals(lm(size ~ age + I(age^2) + dt, data = property_new))
+plot(m,d,xlab="size residual",ylab="price residuals")
+abline(0,coef(fit_property_new)[2])
+lines(lowess(m,d), col="red", lty=2)
+title("Added variable plot for size")
+
+
+## age
+d2 <- residuals(lm(price ~ size + I(age^2) + dt, data = property_new))
+m2 <- residuals(lm(age ~ size + I(age^2) + dt, data = property_new))
+plot(m2,d2,xlab="age residual",ylab="price residuals")
+abline(0,coef(fit_property_new)[3])
+lines(lowess(m2,d2), col="red", lty=2)
+title("Added variable plot for age")
+
+
+## age^2
+d3 <- residuals(lm(price ~ size + age + dt, data = property_new))
+m3 <- residuals(lm(I(age^2) ~ size + age + dt, data = property_new))
+plot(m3,d3,xlab="age^2 residual",ylab="price residuals")
+abline(0,coef(fit_property_new)[4])
+lines(lowess(m3,d3), col="red", lty=2)
+title("Added variable plot for age^2")
+
+
+## dt
+d4 <- residuals(lm(price ~ size + age + I(age^2), data = property_new))
+m4 <- residuals(lm(dt ~ size + age + I(age^2), data = property_new))
+plot(m4,d4,xlab="dt residual",ylab="price residuals")
+abline(0,coef(fit_property_new)[5])
+lines(lowess(m4,d4), col="red", lty=2)
+title("Added variable plot for dt")
+
+
+
+```
+
+
+\
+
+
+After removing the previous influential observation (51), we will now investigate if any new observations have large leverage or are outliers and then see if they will be influential points.
+
+
+```{r, echo = F, fig.height=4}
+par(mfrow = c(1,2))
+
+# Cook's statistic
+h.prop_new <- hatvalues(fit_property_new)       # leverage
+
+plot(h.prop_new, main = "Plot of Leverages", ylab = "Leverages", xlim = c(0, 95), ylim = c(0, 0.75));points(x = c(22,25,82), y = c(h.prop_new[[22]], h.prop_new[[25]], h.prop_new[[82]]), pch = 3, col = "red",cex = 2)
+
+abline(h = 3*mean(h.prop_new), col = "red", lty = 2)
+text(x= 32, y = 0.43, labels = "22")
+text(x= 35, y = 0.23, labels = "25")
+text(x= 92, y = 0.20, labels = "82")
+
+
+influencePlot(fit_property_new)
+
+```
+
+
+Looking at the plot of leverages, we see observations 22, 25, and 82 are large leverage points since they are above the red threshold line, which indicates three times the mean leverage value.
+
+```{r}
+outlierTest(fit_property2)
+
+```
+
+Using the provided outlier test, we find there are still no outliers present. Therefore, we will only examine if observations 22, 25, and 82, which are large leverage points, are influential points. The rule of thumb to determine if an observation is influential is if the observation has a distance (using Cook's distance) greater than 4 divided by the total number of observations. Let's check this:
+
+
+```{r}
+cd.prop_new <- cooks.distance(fit_property_new) # Cook’s statistic
+
+n_new <- nrow(property_new)
+which(cd.prop_new > 4/n_new)
+
+
+```
+
+Here, we see 3 observations meet the condition of being an influential point. However, we have to remember that we check for influential points from large leverage points and outliers. Since observations 22, 25, and 82 were the only large leverage points, and none of these observations were shown above to meet the requirements of being an influential point, we in fact, have no influential points in this model. We can see removing the previous influential observation results in no new influential points in this model.
+
+
+
+
+\newpage
+
+
+**Checklist To Find a Good Model**
+
+* Scatterplots of each Independent Variable
+* Non-Constant Variance Assumption (Residuals vs Fitted, Scale Location)
+* Normality Assumption (Q-Q Plot)
+* Correlated Errors (2 plots, see HW4, Q3b)
+    * Autocorrelation test (Durbin-Watson)
+
+* Large Leverage Points (leverage value > 3 times mean leverage, plot leverages)
+* Outliers    (outlier test, influence plot)
+* Influential Points  (Cook's Distance)
+
+
+* At a Coefficient Level
+    * Plotting Influence on each coefficient
+    * Added Variable Plot
+    * Partial Residual Plot
+
+
+* Check if Transformation is Necessary
+    * Log (only on response or both)
+    * Sqrt (only on response or both)
+    * Box-Cox (only on response)
+    
+* Check if model improves adding higher order terms
+* Check if model improves adding interaction terms
+
+* Model Selection?
+    * AIC (forward, backward, both)
+    * p-values
+    * etc...
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
